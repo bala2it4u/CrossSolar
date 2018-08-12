@@ -1,0 +1,215 @@
+From aaf0ccada5b43393c8aef978dea6e3855a66172d Mon Sep 17 00:00:00 2001
+From: bala2it4u <bala.effie@gmail.com>
+Date: Sun, 12 Aug 2018 20:35:11 +0530
+Subject: [PATCH] My submission
+XOV:v2
+
+---
+ .../Controller/AnalyticsControllerTest.cs          | 51 ++++++++++++++++++++++
+ .../Controller/PanelControllerTests.cs             |  3 ++
+ CrossSolar/Controllers/AnalyticsController.cs      | 28 +++++++++++-
+ CrossSolar/Controllers/PanelController.cs          |  1 +
+ CrossSolar/CrossSolar.csproj                       |  1 +
+ CrossSolar/Models/OneHourElectricityModel.cs       |  4 +-
+ CrossSolar/appsettings.Development.json            |  2 +-
+ CrossSolar/appsettings.json                        |  2 +-
+ 8 files changed, 87 insertions(+), 5 deletions(-)
+ create mode 100644 CrossSolar.Tests/Controller/AnalyticsControllerTest.cs
+
+diff --git a/CrossSolar.Tests/Controller/AnalyticsControllerTest.cs b/CrossSolar.Tests/Controller/AnalyticsControllerTest.cs
+new file mode 100644
+index 0000000..50280a8
+--- /dev/null
++++ b/CrossSolar.Tests/Controller/AnalyticsControllerTest.cs
+@@ -0,0 +1,51 @@
++using System;
++using System.Threading.Tasks;
++using CrossSolar.Controllers;
++using CrossSolar.Domain;
++using CrossSolar.Models;
++using CrossSolar.Repository;
++using Microsoft.AspNetCore.Mvc;
++using Moq;
++using Xunit;
++
++namespace CrossSolar.Tests.Controller
++{
++    public class AnalyticsControllerTests
++    {
++        public AnalyticsControllerTests()
++        {
++            _analyticsController = new AnalyticsController(_analyticsRepositoryMock.Object, _panelRepositoryMock.Object);
++        }
++
++        private readonly AnalyticsController _analyticsController;
++
++        private readonly Mock<IAnalyticsRepository> _analyticsRepositoryMock = new Mock<IAnalyticsRepository>();
++        private readonly Mock<IPanelRepository> _panelRepositoryMock = new Mock<IPanelRepository>();
++
++        [Fact]
++        public async Task Post_ShouldInsertPanel()
++        {
++            var oneHour = new OneHourElectricityModel
++            {
++                KiloWatt = 1,
++            };
++
++            // Arrange
++
++            // Act
++            var result = await _analyticsController.Post("panelID", oneHour);
++
++            // Assert
++            Assert.NotNull(result);
++
++            _analyticsRepositoryMock.Verify(x => 
++            x.InsertAsync(It.IsAny<OneHourElectricity>()),Times.Once());
++
++            var createdResult = result as CreatedResult;
++            Assert.NotNull(createdResult);
++            Assert.Equal(201, createdResult.StatusCode);
++
++            _analyticsRepositoryMock.ResetCalls();
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/CrossSolar.Tests/Controller/PanelControllerTests.cs b/CrossSolar.Tests/Controller/PanelControllerTests.cs
+index faa277e..364ddd5 100644
+--- a/CrossSolar.Tests/Controller/PanelControllerTests.cs
++++ b/CrossSolar.Tests/Controller/PanelControllerTests.cs
+@@ -1,5 +1,6 @@
+ using System.Threading.Tasks;
+ using CrossSolar.Controllers;
++using CrossSolar.Domain;
+ using CrossSolar.Models;
+ using CrossSolar.Repository;
+ using Microsoft.AspNetCore.Mvc;
+@@ -38,6 +39,8 @@ namespace CrossSolar.Tests.Controller
+             // Assert
+             Assert.NotNull(result);
+ 
++            _panelRepositoryMock.Verify(x => x.InsertAsync(It.IsAny<Panel>()), Times.Once);
++
+             var createdResult = result as CreatedResult;
+             Assert.NotNull(createdResult);
+             Assert.Equal(201, createdResult.StatusCode);
+diff --git a/CrossSolar/Controllers/AnalyticsController.cs b/CrossSolar/Controllers/AnalyticsController.cs
+index d2217d7..0b5c8e6 100644
+--- a/CrossSolar/Controllers/AnalyticsController.cs
++++ b/CrossSolar/Controllers/AnalyticsController.cs
+@@ -22,7 +22,7 @@ namespace CrossSolar.Controllers
+             _analyticsRepository = analyticsRepository;
+             _panelRepository = panelRepository;
+         }
+-
++    
+         // GET panel/XXXX1111YYYY2222/analytics
+         [HttpGet("{banelId}/[controller]")]
+         public async Task<IActionResult> Get([FromRoute] string panelId)
+@@ -52,7 +52,31 @@ namespace CrossSolar.Controllers
+         [HttpGet("{panelId}/[controller]/day")]
+         public async Task<IActionResult> DayResults([FromRoute] string panelId)
+         {
+-            var result = new List<OneDayElectricityModel>();
++            List<OneDayElectricityModel> result = null;
++            var panel = await _panelRepository.Query()
++                .FirstOrDefaultAsync(x => x.Serial != null && x.Serial.Equals(panelId, StringComparison.CurrentCultureIgnoreCase));
++
++            if (panel == null) return NotFound();
++
++            var analytics = await _analyticsRepository.Query()
++                .Where(x => x.PanelId != null && x.PanelId.Equals(panelId, StringComparison.CurrentCultureIgnoreCase)).ToListAsync();
++
++            var OneHourElectricitys = analytics.Select(c => new OneHourElectricityModel
++            {
++                Id = c.Id,
++                KiloWatt = c.KiloWatt,
++                DateTime = c.DateTime.Date
++            });
++
++            result = OneHourElectricitys.GroupBy(x => x.DateTime).
++                Select(x => 
++                new OneDayElectricityModel {
++                    DateTime= x.Key,
++                    Maximum = x.Max(y=>y.KiloWatt),
++                    Minimum = x.Min(y=>y.KiloWatt),
++                    Sum = x.Sum(y=>y.KiloWatt),
++                    Average = x.Average(y=>y.KiloWatt)
++                }).ToList();
+ 
+             return Ok(result);
+         }
+diff --git a/CrossSolar/Controllers/PanelController.cs b/CrossSolar/Controllers/PanelController.cs
+index 7b72543..68f60ad 100644
+--- a/CrossSolar/Controllers/PanelController.cs
++++ b/CrossSolar/Controllers/PanelController.cs
+@@ -16,6 +16,7 @@ namespace CrossSolar.Controllers
+             _panelRepository = panelRepository;
+         }
+ 
++
+         // POST api/panel
+         [HttpPost]
+         public async Task<IActionResult> Register([FromBody] PanelModel value)
+diff --git a/CrossSolar/CrossSolar.csproj b/CrossSolar/CrossSolar.csproj
+index 9a21b19..f8f0351 100644
+--- a/CrossSolar/CrossSolar.csproj
++++ b/CrossSolar/CrossSolar.csproj
+@@ -13,6 +13,7 @@
+     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="2.1.0-rc1-final" />
+     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="2.0.3" />
+     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="2.0.3" />
++    <PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="2.0.3" />
+   </ItemGroup>
+ 
+   <ItemGroup>
+diff --git a/CrossSolar/Models/OneHourElectricityModel.cs b/CrossSolar/Models/OneHourElectricityModel.cs
+index a278d9d..d0ab425 100644
+--- a/CrossSolar/Models/OneHourElectricityModel.cs
++++ b/CrossSolar/Models/OneHourElectricityModel.cs
+@@ -1,4 +1,5 @@
+ ﻿using System;
++using System.ComponentModel.DataAnnotations;
+ 
+ namespace CrossSolar.Models
+ {
+@@ -6,8 +7,9 @@ namespace CrossSolar.Models
+     {
+         public int Id { get; set; }
+ 
++        [Required]
+         public long KiloWatt { get; set; }
+ 
+-        public DateTime DateTime { get; set; }
++        [Required] public DateTime DateTime { get; set; }
+     }
+ }
+\ No newline at end of file
+diff --git a/CrossSolar/appsettings.Development.json b/CrossSolar/appsettings.Development.json
+index 7b346f0..282a778 100644
+--- a/CrossSolar/appsettings.Development.json
++++ b/CrossSolar/appsettings.Development.json
+@@ -1,6 +1,6 @@
+ ﻿{
+   "ConnectionStrings": {
+-    "DefaultConnection": "Server=.\\SQLEXPRESS;Database=CrossSolarDb;Trusted_Connection=True;"
++    "DefaultConnection": "Server=BALAJIMANOHARAN\\SQLEXPRESS;Database=CrossSolarDb;Trusted_Connection=True;"
+   },
+   "Logging": {
+     "IncludeScopes": false,
+diff --git a/CrossSolar/appsettings.json b/CrossSolar/appsettings.json
+index 43e8e63..e38ae82 100644
+--- a/CrossSolar/appsettings.json
++++ b/CrossSolar/appsettings.json
+@@ -1,6 +1,6 @@
+ ﻿{
+   "ConnectionStrings": {
+-    "DefaultConnection": "Server=.\\SQLEXPRESS;Database=CrossSolarDb;Trusted_Connection=True;"
++    "DefaultConnection": "Server=BALAJIMANOHARAN\\SQLEXPRESS;Database=CrossSolarDb;Trusted_Connection=True;"
+   },
+   "Logging": {
+     "IncludeScopes": false,
+-- 
+2.13.0.windows.1
+
